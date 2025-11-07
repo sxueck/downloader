@@ -1,0 +1,14 @@
+server:
+  address: "your-server.com:8080"
+  auth_token: "your-auth-token-here"
+
+socks5:
+  port: 1080
+  authentication: false
+  username: ""
+  password: ""
+
+tunnel:
+  heartbeat_interval: 30
+  reconnect_interval: 5
+

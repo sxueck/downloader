@@ -1,0 +1,10 @@
+server:
+  listen: ":8080"
+  auth_token: "your-auth-token-here"
+  tls_cert: "server.crt"
+  tls_key: "server.key"
+
+limits:
+  max_connections: 1000
+  idle_timeout: 300
+
