@@ -60,16 +60,16 @@ func (s *Socks5Server) acceptLoop() {
 }
 
 func (s *Socks5Server) handleConnection(conn net.Conn) {
-	defer conn.Close()
-
 	if err := socks5.Handshake(conn, s.username, s.password); err != nil {
 		log.Printf("SOCKS5 handshake failed: %v", err)
+		conn.Close()
 		return
 	}
 
 	req, err := socks5.ReadRequest(conn)
 	if err != nil {
 		log.Printf("Failed to read SOCKS5 request: %v", err)
+		conn.Close()
 		return
 	}
 
@@ -81,10 +81,13 @@ func (s *Socks5Server) handleConnection(conn net.Conn) {
 	default:
 		socks5.SendReply(conn, socks5.RepCommandNotSupported, nil)
 		log.Printf("Unsupported SOCKS5 command: %d", req.Command)
+		conn.Close()
 	}
 }
 
 func (s *Socks5Server) handleConnect(conn net.Conn, req *socks5.Request) {
+	defer conn.Close()
+
 	if !s.tunnel.IsConnected() {
 		log.Printf("Tunnel not connected, rejecting SOCKS5 connection")
 		socks5.SendReply(conn, socks5.RepServerFailure, nil)
@@ -99,7 +102,8 @@ func (s *Socks5Server) handleConnect(conn net.Conn, req *socks5.Request) {
 
 	addrType := s.convertAddrType(req.AddrType)
 
-	if err := s.tunnel.HandleTCPConnect(conn, addrType, req.DstAddr, req.DstPort); err != nil {
+	closeChan, err := s.tunnel.HandleTCPConnect(conn, addrType, req.DstAddr, req.DstPort)
+	if err != nil {
 		log.Printf("Failed to handle TCP connect: %v", err)
 		socks5.SendReply(conn, socks5.RepServerFailure, nil)
 		return
@@ -113,6 +117,8 @@ func (s *Socks5Server) handleConnect(conn net.Conn, req *socks5.Request) {
 		log.Printf("Failed to send SOCKS5 reply: %v", err)
 		return
 	}
+
+	<-closeChan
 }
 
 func (s *Socks5Server) handleUDPAssociate(conn net.Conn, req *socks5.Request) {

@@ -158,9 +158,9 @@ func (t *Tunnel) nextSessionID() uint32 {
 	return atomic.AddUint32(&t.sessionID, 1)
 }
 
-func (t *Tunnel) HandleTCPConnect(localConn net.Conn, addrType uint8, addr []byte, port uint16) error {
+func (t *Tunnel) HandleTCPConnect(localConn net.Conn, addrType uint8, addr []byte, port uint16) (<-chan struct{}, error) {
 	if !t.IsConnected() {
-		return fmt.Errorf("tunnel not connected")
+		return nil, fmt.Errorf("tunnel not connected")
 	}
 
 	sessionID := t.nextSessionID()
@@ -178,26 +178,26 @@ func (t *Tunnel) HandleTCPConnect(localConn net.Conn, addrType uint8, addr []byt
 	data, err := pkt.Encode()
 	if err != nil {
 		t.sessions.Delete(sessionID)
-		return err
+		return nil, err
 	}
 
 	t.mu.Lock()
 	if t.conn == nil {
 		t.mu.Unlock()
 		t.sessions.Delete(sessionID)
-		return fmt.Errorf("tunnel not connected")
+		return nil, fmt.Errorf("tunnel not connected")
 	}
 	_, err = t.conn.Write(data)
 	t.mu.Unlock()
 
 	if err != nil {
 		t.sessions.Delete(sessionID)
-		return err
+		return nil, err
 	}
 
 	go t.handleLocalRead(session)
 
-	return nil
+	return session.closeChan, nil
 }
 
 func (t *Tunnel) handleLocalRead(session *Session) {
