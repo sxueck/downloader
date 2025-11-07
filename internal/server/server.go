@@ -182,7 +182,7 @@ func (s *Server) handleTCPConnect(session *ClientSession, pkt *protocol.Packet) 
 	addr := pkt.GetAddress()
 	log.Printf("New TCP session %d", pkt.SessionID)
 
-	remoteConn, err := net.DialTimeout("tcp", addr, 10*time.Second)
+	remoteConn, err := net.DialTimeout("tcp4", addr, 10*time.Second)
 	if err != nil {
 		log.Printf("Session %d connection failed: %v, addr=%s", pkt.SessionID, err, addr)
 		s.sendError(session.conn, pkt.SessionID, err.Error())
