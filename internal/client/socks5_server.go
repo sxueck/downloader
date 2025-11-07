@@ -91,6 +91,12 @@ func (s *Socks5Server) handleConnect(conn net.Conn, req *socks5.Request) {
 		return
 	}
 
+	if req.AddrType == socks5.AddrTypeIPv6 {
+		log.Printf("IPv6 addresses are not supported, rejecting connection")
+		socks5.SendReply(conn, socks5.RepAddrTypeNotSupported, nil)
+		return
+	}
+
 	addrType := s.convertAddrType(req.AddrType)
 
 	if err := s.tunnel.HandleTCPConnect(conn, addrType, req.DstAddr, req.DstPort); err != nil {

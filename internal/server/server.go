@@ -180,11 +180,18 @@ func (s *Server) handleClientPackets(session *ClientSession) {
 
 func (s *Server) handleTCPConnect(session *ClientSession, pkt *protocol.Packet) {
 	addr := pkt.GetAddress()
-	log.Printf("New TCP session %d", pkt.SessionID)
+	log.Printf("New TCP session %d to %s", pkt.SessionID, addr)
 
-	remoteConn, err := net.DialTimeout("tcp4", addr, 10*time.Second)
+	targetAddr, err := s.resolveIPv4Address(pkt)
 	if err != nil {
-		log.Printf("Session %d connection failed: %v, addr=%s", pkt.SessionID, err, addr)
+		log.Printf("Session %d address resolution failed: %v, addr=%s", pkt.SessionID, err, addr)
+		s.sendError(session.conn, pkt.SessionID, err.Error())
+		return
+	}
+
+	remoteConn, err := net.DialTimeout("tcp4", targetAddr, 10*time.Second)
+	if err != nil {
+		log.Printf("Session %d connection failed: %v, addr=%s", pkt.SessionID, err, targetAddr)
 		s.sendError(session.conn, pkt.SessionID, err.Error())
 		return
 	}
@@ -197,6 +204,24 @@ func (s *Server) handleTCPConnect(session *ClientSession, pkt *protocol.Packet) 
 	session.sessions.Store(pkt.SessionID, tcpSess)
 
 	go s.handleRemoteRead(session, tcpSess)
+}
+
+func (s *Server) resolveIPv4Address(pkt *protocol.Packet) (string, error) {
+	if pkt.AddrType == protocol.AddrTypeDomain {
+		domain := string(pkt.Addr)
+		return fmt.Sprintf("%s:%d", domain, pkt.Port), nil
+	}
+
+	if pkt.AddrType == protocol.AddrTypeIPv4 && len(pkt.Addr) == 4 {
+		return fmt.Sprintf("%d.%d.%d.%d:%d",
+			pkt.Addr[0], pkt.Addr[1], pkt.Addr[2], pkt.Addr[3], pkt.Port), nil
+	}
+
+	if pkt.AddrType == protocol.AddrTypeIPv6 {
+		return "", fmt.Errorf("IPv6 addresses are not supported, please use domain names or IPv4")
+	}
+
+	return "", fmt.Errorf("unsupported address type: %d", pkt.AddrType)
 }
 
 func (s *Server) handleTCPData(session *ClientSession, pkt *protocol.Packet) {
