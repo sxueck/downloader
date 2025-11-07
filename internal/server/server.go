@@ -184,8 +184,8 @@ func (s *Server) handleTCPConnect(session *ClientSession, pkt *protocol.Packet) 
 
 	remoteConn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
-		log.Printf("Session %d connection failed", pkt.SessionID)
-		s.sendError(session.conn, pkt.SessionID)
+		log.Printf("Session %d connection failed: %v, addr=%s", pkt.SessionID, err, addr)
+		s.sendError(session.conn, pkt.SessionID, err.Error())
 		return
 	}
 
@@ -273,8 +273,11 @@ func (s *Server) handleUDPAssociate(session *ClientSession, pkt *protocol.Packet
 	log.Printf("New UDP session %d", pkt.SessionID)
 }
 
-func (s *Server) sendError(conn net.Conn, sessionID uint32) {
+func (s *Server) sendError(conn net.Conn, sessionID uint32, reason string) {
 	pkt := protocol.NewPacket(protocol.CmdError, sessionID)
+	if reason != "" {
+		pkt.SetData([]byte(reason))
+	}
 	if data, err := pkt.Encode(); err == nil {
 		conn.Write(data)
 	}

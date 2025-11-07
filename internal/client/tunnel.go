@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -170,7 +171,7 @@ func (t *Tunnel) handleLocalRead(session *Session) {
 		session.LocalConn.SetReadDeadline(time.Now().Add(30 * time.Second))
 		n, err := session.LocalConn.Read(buf)
 		if err != nil {
-			if err != io.EOF {
+			if err != io.EOF && !strings.Contains(err.Error(), "use of closed network connection") {
 				log.Printf("Session %d read error: %v", session.ID, err)
 			}
 			return
@@ -233,7 +234,9 @@ func (t *Tunnel) handleServerPackets() {
 			t.handleTCPClose(pkt)
 		case protocol.CmdHeartbeat:
 		case protocol.CmdError:
-			log.Printf("Server error for session %d", pkt.SessionID)
+			if len(pkt.Data) > 0 {
+				log.Printf("Server error for session %d: %s", pkt.SessionID, string(pkt.Data))
+			}
 			t.handleTCPClose(pkt)
 		}
 	}
