@@ -15,15 +15,15 @@ import (
 )
 
 type Server struct {
-	listen        string
-	authToken     string
-	tlsCert       string
-	tlsKey        string
-	maxConns      int
-	idleTimeout   int
-	listener      net.Listener
-	connCount     atomic.Int32
-	sessions      sync.Map
+	listen      string
+	authToken   string
+	tlsCert     string
+	tlsKey      string
+	maxConns    int
+	idleTimeout int
+	listener    net.Listener
+	connCount   atomic.Int32
+	sessions    sync.Map
 }
 
 type ClientSession struct {
@@ -58,6 +58,18 @@ func (s *Server) Start() error {
 	tlsConfig := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS13,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		},
+		PreferServerCipherSuites: true,
+		CurvePreferences: []tls.CurveID{
+			tls.X25519,
+			tls.CurveP256,
+		},
 	}
 
 	listener, err := tls.Listen("tcp", s.listen, tlsConfig)
@@ -66,7 +78,7 @@ func (s *Server) Start() error {
 	}
 
 	s.listener = listener
-	log.Printf("Server listening on %s", s.listen)
+	log.Printf("Server started")
 
 	go s.acceptLoop()
 	return nil
@@ -117,7 +129,7 @@ func (s *Server) handleClient(conn net.Conn) {
 		return
 	}
 
-	log.Printf("Client authenticated from %s", conn.RemoteAddr())
+	log.Printf("Client authenticated")
 
 	session := &ClientSession{
 		conn:      conn,
@@ -168,11 +180,11 @@ func (s *Server) handleClientPackets(session *ClientSession) {
 
 func (s *Server) handleTCPConnect(session *ClientSession, pkt *protocol.Packet) {
 	addr := pkt.GetAddress()
-	log.Printf("TCP connect to %s (session %d)", addr, pkt.SessionID)
+	log.Printf("New TCP session %d", pkt.SessionID)
 
 	remoteConn, err := net.DialTimeout("tcp", addr, 10*time.Second)
 	if err != nil {
-		log.Printf("Failed to connect to %s: %v", addr, err)
+		log.Printf("Session %d connection failed", pkt.SessionID)
 		s.sendError(session.conn, pkt.SessionID)
 		return
 	}
@@ -258,8 +270,7 @@ func (s *Server) handleRemoteRead(session *ClientSession, tcpSess *TCPSession) {
 }
 
 func (s *Server) handleUDPAssociate(session *ClientSession, pkt *protocol.Packet) {
-	addr := pkt.GetAddress()
-	log.Printf("UDP associate to %s (session %d)", addr, pkt.SessionID)
+	log.Printf("New UDP session %d", pkt.SessionID)
 }
 
 func (s *Server) sendError(conn net.Conn, sessionID uint32) {
@@ -268,4 +279,3 @@ func (s *Server) sendError(conn net.Conn, sessionID uint32) {
 		conn.Write(data)
 	}
 }
-

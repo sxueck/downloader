@@ -161,7 +161,14 @@ func (p *Packet) SetData(data []byte) {
 func (p *Packet) GetAddress() string {
 	if p.AddrType == AddrTypeDomain {
 		return fmt.Sprintf("%s:%d", string(p.Addr), p.Port)
+	} else if p.AddrType == AddrTypeIPv4 && len(p.Addr) == 4 {
+		return fmt.Sprintf("%d.%d.%d.%d:%d", p.Addr[0], p.Addr[1], p.Addr[2], p.Addr[3], p.Port)
+	} else if p.AddrType == AddrTypeIPv6 && len(p.Addr) == 16 {
+		return fmt.Sprintf("[%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x:%02x%02x]:%d",
+			p.Addr[0], p.Addr[1], p.Addr[2], p.Addr[3],
+			p.Addr[4], p.Addr[5], p.Addr[6], p.Addr[7],
+			p.Addr[8], p.Addr[9], p.Addr[10], p.Addr[11],
+			p.Addr[12], p.Addr[13], p.Addr[14], p.Addr[15], p.Port)
 	}
-	return fmt.Sprintf("%s:%d", p.Addr, p.Port)
+	return fmt.Sprintf("%v:%d", p.Addr, p.Port)
 }
-

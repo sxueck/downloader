@@ -47,6 +47,19 @@ func (t *Tunnel) Connect() error {
 
 	tlsConfig := &tls.Config{
 		InsecureSkipVerify: true,
+		MinVersion:         tls.VersionTLS12,
+		MaxVersion:         tls.VersionTLS13,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		},
+		CurvePreferences: []tls.CurveID{
+			tls.X25519,
+			tls.CurveP256,
+		},
+		ServerName: "",
 	}
 
 	conn, err := tls.Dial("tcp", t.serverAddr, tlsConfig)
@@ -280,4 +293,3 @@ func (t *Tunnel) HandleUDPAssociate(localAddr *net.UDPAddr, addrType uint8, addr
 
 	return udpConn, nil
 }
-
