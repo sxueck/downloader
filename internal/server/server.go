@@ -248,7 +248,19 @@ func (s *Server) handleTCPConnect(session *ClientSession, pkt *protocol.Packet) 
 func (s *Server) resolveIPv4Address(pkt *protocol.Packet) (string, error) {
 	if pkt.AddrType == protocol.AddrTypeDomain {
 		domain := string(pkt.Addr)
-		return fmt.Sprintf("%s:%d", domain, pkt.Port), nil
+
+		ips, err := net.LookupIP(domain)
+		if err != nil {
+			return "", fmt.Errorf("failed to resolve domain %s: %w", domain, err)
+		}
+
+		for _, ip := range ips {
+			if ipv4 := ip.To4(); ipv4 != nil {
+				return fmt.Sprintf("%s:%d", ipv4.String(), pkt.Port), nil
+			}
+		}
+
+		return "", fmt.Errorf("no IPv4 address found for domain %s", domain)
 	}
 
 	if pkt.AddrType == protocol.AddrTypeIPv4 && len(pkt.Addr) == 4 {

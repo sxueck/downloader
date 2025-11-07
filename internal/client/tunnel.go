@@ -79,9 +79,19 @@ func (t *Tunnel) Connect() error {
 		ServerName: "",
 	}
 
-	conn, err := tls.Dial("tcp", t.serverAddr, tlsConfig)
+	dialer := &net.Dialer{
+		Timeout: 10 * time.Second,
+	}
+
+	tcpConn, err := dialer.Dial("tcp4", t.serverAddr)
 	if err != nil {
 		return fmt.Errorf("failed to connect to server: %w", err)
+	}
+
+	conn := tls.Client(tcpConn, tlsConfig)
+	if err := conn.Handshake(); err != nil {
+		tcpConn.Close()
+		return fmt.Errorf("TLS handshake failed: %w", err)
 	}
 
 	if _, err := conn.Write([]byte(t.authToken + "\n")); err != nil {
