@@ -14,6 +14,13 @@ import (
 	"github.com/sxueck/downloader/pkg/protocol"
 )
 
+// bufferPool 缓冲区对象池，用于复用32KB缓冲区
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 32*1024)
+	},
+}
+
 type Tunnel struct {
 	serverAddr        string
 	authToken         string
@@ -132,13 +139,22 @@ func (t *Tunnel) Close() error {
 		return nil
 	}
 
+	// 清理所有会话，使用 LoadAndDelete 确保原子性
 	t.sessions.Range(func(key, value any) bool {
 		if sess, ok := value.(*Session); ok {
-			close(sess.closeChan)
+			// 安全关闭通道，避免重复关闭
+			select {
+			case <-sess.closeChan:
+				// 通道已关闭，跳过
+			default:
+				close(sess.closeChan)
+			}
 			if sess.LocalConn != nil {
 				sess.LocalConn.Close()
 			}
 		}
+		// 从映射中删除会话
+		t.sessions.Delete(key)
 		return true
 	})
 
@@ -202,20 +218,29 @@ func (t *Tunnel) HandleTCPConnect(localConn net.Conn, addrType uint8, addr []byt
 
 func (t *Tunnel) handleLocalRead(session *Session) {
 	defer func() {
-		t.sessions.Delete(session.ID)
-		session.LocalConn.Close()
-
-		pkt := protocol.NewPacket(protocol.CmdTCPClose, session.ID)
-		if data, err := pkt.Encode(); err == nil {
-			t.mu.Lock()
-			if t.conn != nil {
-				t.conn.Write(data)
+		// 使用 LoadAndDelete 确保原子性删除
+		if _, exists := t.sessions.LoadAndDelete(session.ID); exists {
+			// 安全关闭连接
+			if session.LocalConn != nil {
+				session.LocalConn.Close()
 			}
-			t.mu.Unlock()
+
+			// 通知服务器关闭会话
+			pkt := protocol.NewPacket(protocol.CmdTCPClose, session.ID)
+			if data, err := pkt.Encode(); err == nil {
+				t.mu.Lock()
+				if t.conn != nil {
+					t.conn.Write(data)
+				}
+				t.mu.Unlock()
+			}
 		}
 	}()
 
-	buf := make([]byte, 32*1024)
+	// 从对象池获取缓冲区
+	buf := bufferPool.Get().([]byte)
+	defer bufferPool.Put(buf) // 使用完毕后归还到对象池
+
 	for {
 		select {
 		case <-session.closeChan:
@@ -321,15 +346,25 @@ func (t *Tunnel) handleTCPData(pkt *protocol.Packet) {
 }
 
 func (t *Tunnel) handleTCPClose(pkt *protocol.Packet) {
-	value, ok := t.sessions.Load(pkt.SessionID)
+	// 使用 LoadAndDelete 确保原子性删除
+	value, ok := t.sessions.LoadAndDelete(pkt.SessionID)
 	if !ok {
 		return
 	}
 
 	session := value.(*Session)
-	t.sessions.Delete(pkt.SessionID)
-	close(session.closeChan)
-	session.LocalConn.Close()
+	// 安全关闭通道
+	select {
+	case <-session.closeChan:
+		// 通道已关闭
+	default:
+		close(session.closeChan)
+	}
+
+	// 关闭连接
+	if session.LocalConn != nil {
+		session.LocalConn.Close()
+	}
 }
 
 func (t *Tunnel) HandleUDPAssociate(localAddr *net.UDPAddr, addrType uint8, addr []byte, port uint16) (*net.UDPConn, error) {

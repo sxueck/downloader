@@ -27,6 +27,7 @@ func main() {
 		cfg.Server.TLSKey,
 		cfg.Limits.MaxConnections,
 		cfg.Limits.IdleTimeout,
+		cfg.Server.Whitelist,
 	)
 
 	if err := srv.Start(); err != nil {
@@ -40,4 +41,3 @@ func main() {
 	log.Println("Shutting down...")
 	srv.Stop()
 }
-

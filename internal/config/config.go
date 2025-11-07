@@ -7,9 +7,9 @@ import (
 )
 
 type ClientConfig struct {
-	Server ServerInfo  `yaml:"server"`
-	Socks5 Socks5Info  `yaml:"socks5"`
-	Tunnel TunnelInfo  `yaml:"tunnel"`
+	Server ServerInfo `yaml:"server"`
+	Socks5 Socks5Info `yaml:"socks5"`
+	Tunnel TunnelInfo `yaml:"tunnel"`
 }
 
 type ServerConfig struct {
@@ -35,10 +35,11 @@ type TunnelInfo struct {
 }
 
 type ServerListenInfo struct {
-	Listen    string `yaml:"listen"`
-	AuthToken string `yaml:"auth_token"`
-	TLSCert   string `yaml:"tls_cert"`
-	TLSKey    string `yaml:"tls_key"`
+	Listen    string   `yaml:"listen"`
+	AuthToken string   `yaml:"auth_token"`
+	TLSCert   string   `yaml:"tls_cert"`
+	TLSKey    string   `yaml:"tls_key"`
+	Whitelist []string `yaml:"whitelist"`
 }
 
 type LimitsInfo struct {
@@ -93,4 +94,3 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 
 	return &cfg, nil
 }
-

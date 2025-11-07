@@ -14,6 +14,13 @@ import (
 	"github.com/sxueck/downloader/pkg/protocol"
 )
 
+// bufferPool 缓冲区对象池，用于复用32KB缓冲区
+var bufferPool = sync.Pool{
+	New: func() interface{} {
+		return make([]byte, 32*1024)
+	},
+}
+
 type Server struct {
 	listen      string
 	authToken   string
@@ -24,6 +31,7 @@ type Server struct {
 	listener    net.Listener
 	connCount   atomic.Int32
 	sessions    sync.Map
+	whitelist   *Whitelist
 }
 
 type ClientSession struct {
@@ -38,7 +46,12 @@ type TCPSession struct {
 	closeChan  chan struct{}
 }
 
-func NewServer(listen, authToken, tlsCert, tlsKey string, maxConns, idleTimeout int) *Server {
+func NewServer(listen, authToken, tlsCert, tlsKey string, maxConns, idleTimeout int, whitelistCIDRs []string) *Server {
+	whitelist := NewWhitelist()
+	if err := whitelist.ParseCIDRs(whitelistCIDRs); err != nil {
+		log.Printf("Failed to parse whitelist CIDRs: %v", err)
+	}
+
 	return &Server{
 		listen:      listen,
 		authToken:   authToken,
@@ -46,6 +59,7 @@ func NewServer(listen, authToken, tlsCert, tlsKey string, maxConns, idleTimeout 
 		tlsKey:      tlsKey,
 		maxConns:    maxConns,
 		idleTimeout: idleTimeout,
+		whitelist:   whitelist,
 	}
 }
 
@@ -99,6 +113,14 @@ func (s *Server) acceptLoop() {
 			return
 		}
 
+		// 检查白名单
+		clientIP := conn.RemoteAddr().(*net.TCPAddr).IP.String()
+		if !s.whitelist.IsEmpty() && !s.whitelist.IsAllowed(clientIP) {
+			log.Printf("Connection from %s rejected: not in whitelist", clientIP)
+			conn.Close()
+			continue
+		}
+
 		if int(s.connCount.Load()) >= s.maxConns {
 			log.Printf("Max connections reached, rejecting connection")
 			conn.Close()
@@ -141,14 +163,31 @@ func (s *Server) handleClient(conn net.Conn) {
 
 func (s *Server) handleClientPackets(session *ClientSession) {
 	defer func() {
-		close(session.closeChan)
+		// 安全关闭客户端会话通道
+		select {
+		case <-session.closeChan:
+			// 通道已关闭
+		default:
+			close(session.closeChan)
+		}
+
+		// 清理所有TCP会话
 		session.sessions.Range(func(key, value interface{}) bool {
 			if tcpSess, ok := value.(*TCPSession); ok {
-				close(tcpSess.closeChan)
+				// 安全关闭会话通道
+				select {
+				case <-tcpSess.closeChan:
+					// 通道已关闭
+				default:
+					close(tcpSess.closeChan)
+				}
+				// 关闭远程连接
 				if tcpSess.RemoteConn != nil {
 					tcpSess.RemoteConn.Close()
 				}
 			}
+			// 从映射中删除会话
+			session.sessions.Delete(key)
 			return true
 		})
 	}()
@@ -237,29 +276,47 @@ func (s *Server) handleTCPData(session *ClientSession, pkt *protocol.Packet) {
 }
 
 func (s *Server) handleTCPClose(session *ClientSession, pkt *protocol.Packet) {
-	value, ok := session.sessions.Load(pkt.SessionID)
+	// 使用 LoadAndDelete 确保原子性删除
+	value, ok := session.sessions.LoadAndDelete(pkt.SessionID)
 	if !ok {
 		return
 	}
 
 	tcpSess := value.(*TCPSession)
-	session.sessions.Delete(pkt.SessionID)
-	close(tcpSess.closeChan)
-	tcpSess.RemoteConn.Close()
+	// 安全关闭会话通道
+	select {
+	case <-tcpSess.closeChan:
+		// 通道已关闭
+	default:
+		close(tcpSess.closeChan)
+	}
+	// 关闭远程连接
+	if tcpSess.RemoteConn != nil {
+		tcpSess.RemoteConn.Close()
+	}
 }
 
 func (s *Server) handleRemoteRead(session *ClientSession, tcpSess *TCPSession) {
 	defer func() {
-		session.sessions.Delete(tcpSess.ID)
-		tcpSess.RemoteConn.Close()
+		// 使用 LoadAndDelete 确保原子性删除
+		if _, exists := session.sessions.LoadAndDelete(tcpSess.ID); exists {
+			// 关闭远程连接
+			if tcpSess.RemoteConn != nil {
+				tcpSess.RemoteConn.Close()
+			}
 
-		closePkt := protocol.NewPacket(protocol.CmdTCPClose, tcpSess.ID)
-		if data, err := closePkt.Encode(); err == nil {
-			session.conn.Write(data)
+			// 通知客户端关闭会话
+			closePkt := protocol.NewPacket(protocol.CmdTCPClose, tcpSess.ID)
+			if data, err := closePkt.Encode(); err == nil {
+				session.conn.Write(data)
+			}
 		}
 	}()
 
-	buf := make([]byte, 32*1024)
+	// 从对象池获取缓冲区
+	buf := bufferPool.Get().([]byte)
+	defer bufferPool.Put(buf) // 使用完毕后归还到对象池
+
 	for {
 		select {
 		case <-tcpSess.closeChan:
