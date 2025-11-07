@@ -15,13 +15,16 @@ import (
 )
 
 type Tunnel struct {
-	serverAddr string
-	authToken  string
-	conn       net.Conn
-	sessions   sync.Map
-	sessionID  uint32
-	mu         sync.Mutex
-	closed     atomic.Bool
+	serverAddr        string
+	authToken         string
+	conn              net.Conn
+	sessions          sync.Map
+	sessionID         uint32
+	mu                sync.Mutex
+	closed            atomic.Bool
+	reconnectChan     chan struct{}
+	reconnectInterval time.Duration
+	connected         atomic.Bool
 }
 
 type Session struct {
@@ -33,9 +36,15 @@ type Session struct {
 
 func NewTunnel(serverAddr, authToken string) *Tunnel {
 	return &Tunnel{
-		serverAddr: serverAddr,
-		authToken:  authToken,
+		serverAddr:        serverAddr,
+		authToken:         authToken,
+		reconnectChan:     make(chan struct{}, 1),
+		reconnectInterval: 5 * time.Second,
 	}
+}
+
+func (t *Tunnel) IsConnected() bool {
+	return t.connected.Load()
 }
 
 func (t *Tunnel) Connect() error {
@@ -74,9 +83,48 @@ func (t *Tunnel) Connect() error {
 	}
 
 	t.conn = conn
+	t.connected.Store(true)
 	go t.handleServerPackets()
 
 	return nil
+}
+
+func (t *Tunnel) StartReconnectLoop() {
+	go func() {
+		for {
+			if t.closed.Load() {
+				return
+			}
+
+			<-t.reconnectChan
+			if t.closed.Load() {
+				return
+			}
+
+			log.Println("Attempting to reconnect to server...")
+			for i := 0; i < 10; i++ {
+				if t.closed.Load() {
+					return
+				}
+
+				if err := t.Connect(); err != nil {
+					log.Printf("Reconnection attempt %d failed: %v", i+1, err)
+					time.Sleep(t.reconnectInterval)
+					continue
+				}
+
+				log.Println("Reconnected to server successfully")
+				break
+			}
+		}
+	}()
+}
+
+func (t *Tunnel) triggerReconnect() {
+	select {
+	case t.reconnectChan <- struct{}{}:
+	default:
+	}
 }
 
 func (t *Tunnel) Close() error {
@@ -84,7 +132,7 @@ func (t *Tunnel) Close() error {
 		return nil
 	}
 
-	t.sessions.Range(func(key, value interface{}) bool {
+	t.sessions.Range(func(key, value any) bool {
 		if sess, ok := value.(*Session); ok {
 			close(sess.closeChan)
 			if sess.LocalConn != nil {
@@ -101,6 +149,7 @@ func (t *Tunnel) Close() error {
 		t.conn.Close()
 		t.conn = nil
 	}
+	t.connected.Store(false)
 
 	return nil
 }
@@ -110,6 +159,10 @@ func (t *Tunnel) nextSessionID() uint32 {
 }
 
 func (t *Tunnel) HandleTCPConnect(localConn net.Conn, addrType uint8, addr []byte, port uint16) error {
+	if !t.IsConnected() {
+		return fmt.Errorf("tunnel not connected")
+	}
+
 	sessionID := t.nextSessionID()
 
 	session := &Session{
@@ -124,12 +177,14 @@ func (t *Tunnel) HandleTCPConnect(localConn net.Conn, addrType uint8, addr []byt
 
 	data, err := pkt.Encode()
 	if err != nil {
+		t.sessions.Delete(sessionID)
 		return err
 	}
 
 	t.mu.Lock()
 	if t.conn == nil {
 		t.mu.Unlock()
+		t.sessions.Delete(sessionID)
 		return fmt.Errorf("tunnel not connected")
 	}
 	_, err = t.conn.Write(data)
@@ -203,7 +258,18 @@ func (t *Tunnel) handleLocalRead(session *Session) {
 
 func (t *Tunnel) handleServerPackets() {
 	defer func() {
-		t.Close()
+		t.mu.Lock()
+		if t.conn != nil {
+			t.conn.Close()
+			t.conn = nil
+		}
+		t.mu.Unlock()
+		t.connected.Store(false)
+
+		if !t.closed.Load() {
+			log.Println("Connection lost, triggering reconnect...")
+			t.triggerReconnect()
+		}
 	}()
 
 	for {
@@ -295,4 +361,26 @@ func (t *Tunnel) HandleUDPAssociate(localAddr *net.UDPAddr, addrType uint8, addr
 	}
 
 	return udpConn, nil
+}
+
+func (t *Tunnel) SendHeartbeat() error {
+	if !t.IsConnected() {
+		return fmt.Errorf("tunnel not connected")
+	}
+
+	pkt := protocol.NewPacket(protocol.CmdHeartbeat, 0)
+	data, err := pkt.Encode()
+	if err != nil {
+		return err
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if t.conn == nil {
+		return fmt.Errorf("tunnel not connected")
+	}
+
+	_, err = t.conn.Write(data)
+	return err
 }

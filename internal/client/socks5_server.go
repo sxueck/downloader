@@ -85,6 +85,12 @@ func (s *Socks5Server) handleConnection(conn net.Conn) {
 }
 
 func (s *Socks5Server) handleConnect(conn net.Conn, req *socks5.Request) {
+	if !s.tunnel.IsConnected() {
+		log.Printf("Tunnel not connected, rejecting SOCKS5 connection")
+		socks5.SendReply(conn, socks5.RepServerFailure, nil)
+		return
+	}
+
 	addrType := s.convertAddrType(req.AddrType)
 
 	if err := s.tunnel.HandleTCPConnect(conn, addrType, req.DstAddr, req.DstPort); err != nil {
@@ -141,4 +147,3 @@ func (s *Socks5Server) convertAddrType(socksAddrType uint8) uint8 {
 		return protocol.AddrTypeIPv4
 	}
 }
-

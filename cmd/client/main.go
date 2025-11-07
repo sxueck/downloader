@@ -27,6 +27,8 @@ func main() {
 		log.Fatalf("Failed to connect to server: %v", err)
 	}
 
+	tunnel.StartReconnectLoop()
+
 	username := ""
 	password := ""
 	if cfg.Socks5.Authentication {
@@ -72,6 +74,8 @@ func heartbeatLoop(tunnel *client.Tunnel, interval int) {
 	defer ticker.Stop()
 
 	for range ticker.C {
+		if err := tunnel.SendHeartbeat(); err != nil {
+			log.Printf("Failed to send heartbeat: %v", err)
+		}
 	}
 }
-
